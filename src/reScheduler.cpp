@@ -2,8 +2,11 @@
 #include "reScheduler.h"
 #include "reEvents.h"
 #include "rLog.h"
+#include "rTypes.h"
+#include "reNvs.h"
 #include "reEsp32.h"
 #include "reParams.h"
+#include "sys/queue.h"
 #include "project_config.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -24,13 +27,69 @@ StaticTask_t _schedulerTaskBuffer;
 StackType_t _schedulerTaskStack[CONFIG_SCHEDULER_STACK_SIZE];
 #endif // CONFIG_SCHEDULER_STATIC_ALLOCATION
 
+typedef struct schedulerItem_t {
+  timespan_t* timespan;
+  int8_t state;
+  uint_fast32_t value;
+  STAILQ_ENTRY(schedulerItem_t) next;
+} schedulerItem_t;
+typedef struct schedulerItem_t *schedulerItemHandle_t;
+STAILQ_HEAD(schedulerItemHead_t, schedulerItem_t);
+typedef struct schedulerItemHead_t *schedulerItemHeadHandle_t;
+static schedulerItemHeadHandle_t schedulerItems = nullptr;
+
+// -----------------------------------------------------------------------------------------------------------------------
+// ------------------------------------------------- Common functions ----------------------------------------------------
+// -----------------------------------------------------------------------------------------------------------------------
+
+bool schedulerInit()
+{
+  if (!schedulerItems) {
+    schedulerItems = (schedulerItemHeadHandle_t)calloc(1, sizeof(schedulerItemHead_t));
+    if (schedulerItems) {
+      STAILQ_INIT(schedulerItems);
+    }
+    else {
+      rlog_e(logTAG, "Scheduler initialization error!");
+      return false;
+    }
+  };
+  return true;
+}
+
+void schedulerFree()
+{
+  if (schedulerItems) {
+    schedulerItemHandle_t itemL, tmpL;
+    STAILQ_FOREACH_SAFE(itemL, schedulerItems, next, tmpL) {
+      STAILQ_REMOVE(schedulerItems, itemL, schedulerItem_t, next);
+      free(itemL);
+    };
+    free(schedulerItems);
+    schedulerItems = nullptr;
+  };
+}
+
+void schedulerRegister(timespan_t* timespan, uint32_t value)
+{
+  if (schedulerItems) {
+    schedulerItemHandle_t item = (schedulerItemHandle_t)calloc(1, sizeof(schedulerItem_t));
+    if (item) {
+      item->timespan = timespan;
+      item->value = value;
+      item->state = -1;
+      STAILQ_INSERT_TAIL(schedulerItems, item, next);
+    };
+  };
+}
+
 // -----------------------------------------------------------------------------------------------------------------------
 // ----------------------------------------------------- Silent mode -----------------------------------------------------
 // -----------------------------------------------------------------------------------------------------------------------
 
 #if CONFIG_SILENT_MODE_ENABLE
 
-static uint32_t tsSilentMode = CONFIG_SILENT_MODE_INTERVAL;
+static timespan_t tsSilentMode = CONFIG_SILENT_MODE_INTERVAL;
 static bool stateSilentMode = false;
 static const char* tagSM = "TIME";
 
@@ -44,10 +103,7 @@ void silentModeRegister()
 void silentModeCheck(const struct tm timeinfo)
 {
   if (tsSilentMode > 0) {
-    uint16_t t1 = tsSilentMode / 10000;
-    uint16_t t2 = tsSilentMode % 10000;
-    int16_t  t0 = timeinfo.tm_hour * 100 + timeinfo.tm_min;
-    bool newSilentMode = (t1 < t2) ? ((t0 >= t1) && (t0 < t2)) : !((t0 >= t2) && (t1 > t0));
+    bool newSilentMode = checkTimespan(tsSilentMode, timeinfo);
     rlog_v(tagSM, "Silent mode check: t0=%.4d, t1=%.4d, t2=%.4d, old_mode=%d, new_mode=%d", t0, t1, t2, stateSilentMode, newSilentMode);
     // If the regime has changed
     if (stateSilentMode != newSilentMode) {
@@ -121,6 +177,22 @@ static void schedulerTaskExec(void* args)
         mqttPublishDateTime(nowS);
         #endif // CONFIG_MQTT_TIME_ENABLE
 
+        // Check schedule list
+        if (schedulerItems) {
+          schedulerItemHandle_t item;
+          STAILQ_FOREACH(item, schedulerItems, next) {
+            int8_t newState = checkTimespan(nowS, *item->timespan);
+            if (newState != item->state) {
+              item->state = newState;
+              if (newState == 1) {
+                eventLoopPost(RE_TIME_EVENTS, RE_TIME_TIMESPAN_ON, (void*)item->value, sizeof(item->value), portMAX_DELAY);
+              } else {
+                eventLoopPost(RE_TIME_EVENTS, RE_TIME_TIMESPAN_OFF, (void*)item->value, sizeof(item->value), portMAX_DELAY);
+              };
+            };
+          };
+        };
+
         // Check night (silent) mode
         #if CONFIG_SILENT_MODE_ENABLE
         silentModeCheck(nowS);
@@ -167,6 +239,7 @@ bool schedulerTaskCreate(bool createSuspended)
       return false;
     }
     else {
+      schedulerInit();
       #if CONFIG_SILENT_MODE_ENABLE
       silentModeRegister();
       #endif // CONFIG_SILENT_MODE_ENABLE
@@ -218,6 +291,7 @@ void schedulerTaskDelete()
     schedulerEventHandlerUnregister();
     vTaskDelete(_schedulerTask);
     _schedulerTask = nullptr;
+    schedulerFree();
     rloga_d("Task [ %s ] was deleted", schedulerTaskName);
   };
 }

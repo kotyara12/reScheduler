@@ -10,10 +10,15 @@
 #define __RE_SCHEDULER_H__
 
 #include <stdbool.h>
+#include "rTypes.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+bool schedulerInit();
+void schedulerFree();
+void schedulerRegister(timespan_t* timespan, uint32_t value);
 
 bool schedulerTaskCreate(bool createSuspended);
 bool schedulerTaskSuspend();
