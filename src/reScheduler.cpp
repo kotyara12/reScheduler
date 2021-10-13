@@ -8,6 +8,7 @@
 #include "reParams.h"
 #include "sys/queue.h"
 #include "project_config.h"
+#include "def_consts.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #if CONFIG_MQTT_STATUS_ONLINE || CONFIG_MQTT_SYSINFO_ENABLE
