@@ -13,9 +13,6 @@
 #if CONFIG_MQTT_STATUS_ONLINE || CONFIG_MQTT_SYSINFO_ENABLE
 #include "reSysInfo.h"
 #endif // CONFIG_MQTT_STATUS_ONLINE || CONFIG_MQTT_SYSINFO_ENABLE
-#if CONFIG_EVENT_LOOP_STATISTIC_ENABLED
-#include "reEventsStat.h"
-#endif // CONFIG_EVENT_LOOP_STATISTIC_ENABLED
 
 static const char* logTAG = "SCHD";
 static const char* schedulerTaskName = "scheduler";
@@ -103,7 +100,7 @@ void silentModeRegister()
 void silentModeCheck(const struct tm timeinfo)
 {
   if (tsSilentMode > 0) {
-    bool newSilentMode = checkTimespan(tsSilentMode, timeinfo);
+    bool newSilentMode = checkTimespan(timeinfo, tsSilentMode);
     rlog_v(tagSM, "Silent mode check: t0=%.4d, t1=%.4d, t2=%.4d, old_mode=%d, new_mode=%d", t0, t1, t2, stateSilentMode, newSilentMode);
     // If the regime has changed
     if (stateSilentMode != newSilentMode) {
@@ -150,10 +147,6 @@ static void schedulerTaskExec(void* args)
   static esp_timer_t timerSysInfo;
   timerSet(&timerSysInfo, CONFIG_MQTT_SYSINFO_INTERVAL);
   #endif // CONFIG_MQTT_STATUS_ONLINE || CONFIG_MQTT_SYSINFO_ENABLE
-
-  #if CONFIG_EVENT_LOOP_STATISTIC_ENABLED
-  eventStatStart();
-  #endif // CONFIG_EVENT_LOOP_STATISTIC_ENABLED
 
   while (true) {
     // Get the current time
@@ -208,10 +201,6 @@ static void schedulerTaskExec(void* args)
       #if CONFIG_MQTT_STATUS_ONLINE || CONFIG_MQTT_SYSINFO_ENABLE
       sysinfoPublishSysInfo();
       #endif // CONFIG_MQTT_STATUS_ONLINE || CONFIG_MQTT_SYSINFO_ENABLE
-
-      #if CONFIG_EVENT_LOOP_STATISTIC_ENABLED
-      eventStatMqttPublish();
-      #endif // CONFIG_EVENT_LOOP_STATISTIC_ENABLED
     };
     #endif // CONFIG_MQTT_STATUS_ONLINE || CONFIG_MQTT_SYSINFO_ENABLE || CONFIG_EVENT_LOOP_STATISTIC_ENABLED
 

@@ -1,4 +1,4 @@
-# reScheduler for ESP32 / ESP-IDF
+# reEvents for ESP32 / ESP-IDF
 
 Library for working with schedules (ESP-IDF)
 
@@ -8,7 +8,6 @@ Library for working with schedules (ESP-IDF)
   - https://github.com/kotyara12/reEsp32
   - https://github.com/kotyara12/reParams
   - https://github.com/kotyara12/reSysInfo (optional)
-  - https://github.com/kotyara12/reEventsStat (optional)
 
 ### Notes:
   - libraries starting with the <b>re</b> prefix are only suitable for ESP32 and ESP-IDF
