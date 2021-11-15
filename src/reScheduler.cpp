@@ -148,6 +148,10 @@ static void schedulerTaskExec(void* args)
   static esp_timer_t timerSysInfo;
   timerSet(&timerSysInfo, CONFIG_MQTT_SYSINFO_INTERVAL);
   #endif // CONFIG_MQTT_STATUS_ONLINE || CONFIG_MQTT_SYSINFO_ENABLE
+  #if CONFIG_MQTT_TASKLIST_ENABLE
+  static esp_timer_t timerTaskList;
+  timerSet(&timerTaskList, CONFIG_MQTT_TASKLIST_INTERVAL);
+  #endif // CONFIG_MQTT_TASKLIST_ENABLE
 
   while (true) {
     // Get the current time
@@ -204,6 +208,13 @@ static void schedulerTaskExec(void* args)
       #endif // CONFIG_MQTT_STATUS_ONLINE || CONFIG_MQTT_SYSINFO_ENABLE
     };
     #endif // CONFIG_MQTT_STATUS_ONLINE || CONFIG_MQTT_SYSINFO_ENABLE || CONFIG_EVENT_LOOP_STATISTIC_ENABLED
+
+    #if CONFIG_MQTT_TASKLIST_ENABLE
+    if (timerTimeout(&timerTaskList)) {
+      timerSet(&timerTaskList, CONFIG_MQTT_TASKLIST_INTERVAL);
+      sysinfoPublishTaskList();
+    };
+    #endif // CONFIG_MQTT_TASKLIST_ENABLE
 
     vTaskDelay(CONFIG_SCHEDULER_DELAY);
   };
