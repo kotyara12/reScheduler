@@ -148,6 +148,10 @@ static void schedulerTaskExec(void* args)
   static esp_timer_t timerSysInfo;
   timerSet(&timerSysInfo, CONFIG_MQTT_SYSINFO_INTERVAL);
   #endif // CONFIG_MQTT_STATUS_ONLINE || CONFIG_MQTT_SYSINFO_ENABLE
+  #if CONFIG_MQTT_TASKLIST_ENABLE
+  static esp_timer_t timerTaskList;
+  timerSet(&timerTaskList, CONFIG_MQTT_TASKLIST_INTERVAL);
+  #endif // CONFIG_MQTT_TASKLIST_ENABLE
 
   while (true) {
     // Get the current time
@@ -158,6 +162,23 @@ static void schedulerTaskExec(void* args)
 
       // Publish an event every minute
       eventLoopPost(RE_TIME_EVENTS, RE_TIME_EVERY_MINUTE, nullptr, 0, portMAX_DELAY);
+
+      // Publish an event about beginning of next interval
+      if (nowS.tm_min == 0) {
+        eventLoopPost(RE_TIME_EVENTS, RE_TIME_START_OF_HOUR, nullptr, 0, portMAX_DELAY);
+        if (nowS.tm_hour == 0) {
+          eventLoopPost(RE_TIME_EVENTS, RE_TIME_START_OF_DAY, nullptr, 0, portMAX_DELAY);
+          if (nowS.tm_wday == CONFIG_FORMAT_FIRST_DAY_OF_WEEK) {
+            eventLoopPost(RE_TIME_EVENTS, RE_TIME_START_OF_WEEK, nullptr, 0, portMAX_DELAY);
+          };
+          if (nowS.tm_mday == 1) {
+            eventLoopPost(RE_TIME_EVENTS, RE_TIME_START_OF_MONTH, nullptr, 0, portMAX_DELAY);
+            if (nowS.tm_mon == 1) {
+              eventLoopPost(RE_TIME_EVENTS, RE_TIME_START_OF_YEAR, nullptr, 0, portMAX_DELAY);
+            };
+          };
+        };
+      };
 
       // Calculate the operating time of the device
       sysinfoWorkTimeInc();
@@ -204,6 +225,13 @@ static void schedulerTaskExec(void* args)
       #endif // CONFIG_MQTT_STATUS_ONLINE || CONFIG_MQTT_SYSINFO_ENABLE
     };
     #endif // CONFIG_MQTT_STATUS_ONLINE || CONFIG_MQTT_SYSINFO_ENABLE || CONFIG_EVENT_LOOP_STATISTIC_ENABLED
+
+    #if CONFIG_MQTT_TASKLIST_ENABLE
+    if (timerTimeout(&timerTaskList)) {
+      timerSet(&timerTaskList, CONFIG_MQTT_TASKLIST_INTERVAL);
+      sysinfoPublishTaskList();
+    };
+    #endif // CONFIG_MQTT_TASKLIST_ENABLE
 
     vTaskDelay(CONFIG_SCHEDULER_DELAY);
   };
