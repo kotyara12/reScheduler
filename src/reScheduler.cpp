@@ -25,6 +25,12 @@ StaticTask_t _schedulerTaskBuffer;
 StackType_t _schedulerTaskStack[CONFIG_SCHEDULER_STACK_SIZE];
 #endif // CONFIG_SCHEDULER_STATIC_ALLOCATION
 
+#if (defined(CONFIG_SILENT_MODE_ENABLE) && CONFIG_SILENT_MODE_ENABLE) || (defined(CONFIG_MULTI_TARIFF_ENABLE) && CONFIG_MULTI_TARIFF_ENABLE)
+#define __SCHEDULER_REGISTER_PARAMS__ 1
+#else
+#define __SCHEDULER_REGISTER_PARAMS__ 1
+#endif
+
 typedef struct schedulerItem_t {
   timespan_t* timespan;
   int8_t state;
@@ -85,7 +91,7 @@ void schedulerRegister(timespan_t* timespan, uint32_t value)
 // ----------------------------------------------------- Silent mode -----------------------------------------------------
 // -----------------------------------------------------------------------------------------------------------------------
 
-#if CONFIG_SILENT_MODE_ENABLE
+#if defined(CONFIG_SILENT_MODE_ENABLE) && CONFIG_SILENT_MODE_ENABLE
 
 static timespan_t tsSilentMode = CONFIG_SILENT_MODE_INTERVAL;
 static bool stateSilentMode = false;
@@ -102,8 +108,7 @@ void silentModeCheck(const struct tm timeinfo)
 {
   if (tsSilentMode > 0) {
     bool newSilentMode = checkTimespan(timeinfo, tsSilentMode);
-    rlog_v(tagSM, "Silent mode check: t0=%.4d, t1=%.4d, t2=%.4d, old_mode=%d, new_mode=%d", t0, t1, t2, stateSilentMode, newSilentMode);
-    // If the regime has changed
+    // If the mode has changed
     if (stateSilentMode != newSilentMode) {
       stateSilentMode = newSilentMode;
       if (newSilentMode) {
@@ -119,7 +124,6 @@ void silentModeCheck(const struct tm timeinfo)
 
 void silentModeCheckExternal()
 {
-  rlog_d(tagSM, "Silent mode check forced");
   time_t nowT;
   struct tm nowS;
   nowT = time(nullptr);
@@ -133,6 +137,192 @@ bool isSilentMode()
 }
 
 #endif // CONFIG_SILENT_MODE_ENABLE
+
+// -----------------------------------------------------------------------------------------------------------------------
+// ----------------------------------------------------- Multi tariff ----------------------------------------------------
+// -----------------------------------------------------------------------------------------------------------------------
+
+#if defined(CONFIG_MULTI_TARIFF_ENABLE) && CONFIG_MULTI_TARIFF_ENABLE
+
+static uint8_t iTariff = 0;
+static const char* tagMT = "MTRF";
+
+// Tariff 1
+#ifdef CONFIG_MULTI_TARIFF_INTERVAL_DAY_1
+static timespan_t tsTariffDay1 = CONFIG_MULTI_TARIFF_INTERVAL_DAY_1;
+#endif // CONFIG_MULTI_TARIFF_INTERVAL_DAY_1
+#ifdef CONFIG_MULTI_TARIFF_INTERVAL_DAY_2
+static timespan_t tsTariffDay2 = CONFIG_MULTI_TARIFF_INTERVAL_DAY_2;
+#endif // CONFIG_MULTI_TARIFF_INTERVAL_DAY_2
+#ifdef CONFIG_MULTI_TARIFF_INTERVAL_DAY_3
+static timespan_t tsTariffDay3 = CONFIG_MULTI_TARIFF_INTERVAL_DAY_3;
+#endif // CONFIG_MULTI_TARIFF_INTERVAL_DAY_3
+
+// Tariff 2
+#ifdef CONFIG_MULTI_TARIFF_INTERVAL_SELF_1
+static timespan_t tsTariffSelf1 = CONFIG_MULTI_TARIFF_INTERVAL_SELF_1;
+#endif // CONFIG_MULTI_TARIFF_INTERVAL_SELF_1
+#ifdef CONFIG_MULTI_TARIFF_INTERVAL_SELF_2
+static timespan_t tsTariffSelf2 = CONFIG_MULTI_TARIFF_INTERVAL_SELF_2;
+#endif // CONFIG_MULTI_TARIFF_INTERVAL_SELF_2
+#ifdef CONFIG_MULTI_TARIFF_INTERVAL_SELF_3
+static timespan_t tsTariffSelf3 = CONFIG_MULTI_TARIFF_INTERVAL_SELF_3;
+#endif // CONFIG_MULTI_TARIFF_INTERVAL_SELF_3
+
+// Tariff 3
+#ifdef CONFIG_MULTI_TARIFF_INTERVAL_NIGHT_1
+static timespan_t tsTariffNight1 = CONFIG_MULTI_TARIFF_INTERVAL_NIGHT_1;
+#endif // CONFIG_MULTI_TARIFF_INTERVAL_NIGHT_1
+#ifdef CONFIG_MULTI_TARIFF_INTERVAL_NIGHT_2
+static timespan_t tsTariffNight2 = CONFIG_MULTI_TARIFF_INTERVAL_NIGHT_2;
+#endif // CONFIG_MULTI_TARIFF_INTERVAL_NIGHT_2
+#ifdef CONFIG_MULTI_TARIFF_INTERVAL_NIGHT_3
+static timespan_t tsTariffNight3 = CONFIG_MULTI_TARIFF_INTERVAL_NIGHT_3;
+#endif // CONFIG_MULTI_TARIFF_INTERVAL_NIGHT_3
+
+void multiTariffRegister()
+{
+  paramsGroupHandle_t pgTariffs = paramsRegisterGroup(nullptr, 
+    CONFIG_MULTI_TARIFF_GROUP_KEY, CONFIG_MULTI_TARIFF_GROUP_TOPIC, CONFIG_MULTI_TARIFF_GROUP_NAME);
+
+  // Tariff 1
+  #ifdef CONFIG_MULTI_TARIFF_INTERVAL_DAY_1
+    paramsGroupHandle_t pgTariffDay = paramsRegisterGroup(pgTariffs, 
+      CONFIG_MULTI_TARIFF_DAY_KEY, CONFIG_MULTI_TARIFF_DAY_TOPIC, CONFIG_MULTI_TARIFF_DAY_NAME);
+    #ifdef CONFIG_MULTI_TARIFF_INTERVAL_DAY_2
+      paramsRegisterValue(OPT_KIND_PARAMETER, OPT_TYPE_TIMESPAN, nullptr, pgTariffDay,
+        CONFIG_MULTI_TARIFF_TIMESPAN_1_TOPIC, CONFIG_MULTI_TARIFF_TIMESPAN_1_NAME,
+        CONFIG_MQTT_PARAMS_QOS, (void*)&tsTariffDay1);
+      paramsRegisterValue(OPT_KIND_PARAMETER, OPT_TYPE_TIMESPAN, nullptr, pgTariffDay,
+        CONFIG_MULTI_TARIFF_TIMESPAN_2_TOPIC, CONFIG_MULTI_TARIFF_TIMESPAN_2_NAME,
+        CONFIG_MQTT_PARAMS_QOS, (void*)&tsTariffDay2);
+      #ifdef CONFIG_MULTI_TARIFF_INTERVAL_DAY_3
+        paramsRegisterValue(OPT_KIND_PARAMETER, OPT_TYPE_TIMESPAN, nullptr, pgTariffDay,
+          CONFIG_MULTI_TARIFF_TIMESPAN_3_TOPIC, CONFIG_MULTI_TARIFF_TIMESPAN_3_NAME,
+          CONFIG_MQTT_PARAMS_QOS, (void*)&tsTariffDay3);
+      #endif // CONFIG_MULTI_TARIFF_INTERVAL_DAY_3
+    #else
+      paramsRegisterValue(OPT_KIND_PARAMETER, OPT_TYPE_TIMESPAN, nullptr, pgTariffDay,
+        CONFIG_MULTI_TARIFF_TIMESPAN_TOPIC, CONFIG_MULTI_TARIFF_TIMESPAN_NAME,
+        CONFIG_MQTT_PARAMS_QOS, (void*)&tsTariffDay1);
+    #endif // CONFIG_MULTI_TARIFF_INTERVAL_DAY_2
+  #endif // CONFIG_MULTI_TARIFF_INTERVAL_DAY_1
+
+  // Tariff 2
+  #ifdef CONFIG_MULTI_TARIFF_INTERVAL_SELF_1
+    paramsGroupHandle_t pgTariffSelf = paramsRegisterGroup(pgTariffs, 
+      CONFIG_MULTI_TARIFF_SELF_KEY, CONFIG_MULTI_TARIFF_SELF_TOPIC, CONFIG_MULTI_TARIFF_SELF_NAME);
+    #ifdef CONFIG_MULTI_TARIFF_INTERVAL_SELF_2
+      paramsRegisterValue(OPT_KIND_PARAMETER, OPT_TYPE_TIMESPAN, nullptr, pgTariffSelf,
+        CONFIG_MULTI_TARIFF_TIMESPAN_1_TOPIC, CONFIG_MULTI_TARIFF_TIMESPAN_1_NAME,
+        CONFIG_MQTT_PARAMS_QOS, (void*)&tsTariffSelf1);
+      paramsRegisterValue(OPT_KIND_PARAMETER, OPT_TYPE_TIMESPAN, nullptr, pgTariffSelf,
+        CONFIG_MULTI_TARIFF_TIMESPAN_2_TOPIC, CONFIG_MULTI_TARIFF_TIMESPAN_2_NAME,
+        CONFIG_MQTT_PARAMS_QOS, (void*)&tsTariffSelf2);
+      #ifdef CONFIG_MULTI_TARIFF_INTERVAL_SELF_3
+        paramsRegisterValue(OPT_KIND_PARAMETER, OPT_TYPE_TIMESPAN, nullptr, pgTariffSelf,
+          CONFIG_MULTI_TARIFF_TIMESPAN_3_TOPIC, CONFIG_MULTI_TARIFF_TIMESPAN_3_NAME,
+          CONFIG_MQTT_PARAMS_QOS, (void*)&tsTariffSelf3);
+      #endif // CONFIG_MULTI_TARIFF_INTERVAL_SELF_3
+    #else
+      paramsRegisterValue(OPT_KIND_PARAMETER, OPT_TYPE_TIMESPAN, nullptr, pgTariffSelf,
+        CONFIG_MULTI_TARIFF_TIMESPAN_TOPIC, CONFIG_MULTI_TARIFF_TIMESPAN_NAME,
+        CONFIG_MQTT_PARAMS_QOS, (void*)&tsTariffSelf1);
+    #endif // CONFIG_MULTI_TARIFF_INTERVAL_SELF_2
+  #endif // CONFIG_MULTI_TARIFF_INTERVAL_SELF_1
+
+  // Tariff 3
+  #ifdef CONFIG_MULTI_TARIFF_INTERVAL_NIGHT_1
+    paramsGroupHandle_t pgTariffNight = paramsRegisterGroup(pgTariffs, 
+      CONFIG_MULTI_TARIFF_NIGHT_KEY, CONFIG_MULTI_TARIFF_NIGHT_TOPIC, CONFIG_MULTI_TARIFF_NIGHT_NAME);
+    #ifdef CONFIG_MULTI_TARIFF_INTERVAL_NIGHT_2
+      paramsRegisterValue(OPT_KIND_PARAMETER, OPT_TYPE_TIMESPAN, nullptr, pgTariffNight,
+        CONFIG_MULTI_TARIFF_TIMESPAN_1_TOPIC, CONFIG_MULTI_TARIFF_TIMESPAN_1_NAME,
+        CONFIG_MQTT_PARAMS_QOS, (void*)&tsTariffNight1);
+      paramsRegisterValue(OPT_KIND_PARAMETER, OPT_TYPE_TIMESPAN, nullptr, pgTariffNight,
+        CONFIG_MULTI_TARIFF_TIMESPAN_2_TOPIC, CONFIG_MULTI_TARIFF_TIMESPAN_2_NAME,
+        CONFIG_MQTT_PARAMS_QOS, (void*)&tsTariffNight2);
+      #ifdef CONFIG_MULTI_TARIFF_INTERVAL_NIGHT_3
+        paramsRegisterValue(OPT_KIND_PARAMETER, OPT_TYPE_TIMESPAN, nullptr, pgTariffNight,
+          CONFIG_MULTI_TARIFF_TIMESPAN_3_TOPIC, CONFIG_MULTI_TARIFF_TIMESPAN_3_NAME,
+          CONFIG_MQTT_PARAMS_QOS, (void*)&tsTariffNight3);
+      #endif // CONFIG_MULTI_TARIFF_INTERVAL_NIGHT_3
+    #else
+      paramsRegisterValue(OPT_KIND_PARAMETER, OPT_TYPE_TIMESPAN, nullptr, pgTariffNight,
+        CONFIG_MULTI_TARIFF_TIMESPAN_TOPIC, CONFIG_MULTI_TARIFF_TIMESPAN_NAME,
+        CONFIG_MQTT_PARAMS_QOS, (void*)&tsTariffNight1);
+    #endif // CONFIG_MULTI_TARIFF_INTERVAL_NIGHT_2
+  #endif // CONFIG_MULTI_TARIFF_INTERVAL_NIGHT_1
+}
+
+void multiTariffCheck(const struct tm timeinfo)
+{
+  // Tariff 1
+  bool isT1 = false;
+  #ifdef CONFIG_MULTI_TARIFF_INTERVAL_DAY_1
+    isT1 = isT1 || ((tsTariffDay1 > 0) && checkTimespan(timeinfo, tsTariffDay1));
+    #ifdef CONFIG_MULTI_TARIFF_INTERVAL_DAY_2
+      isT1 = isT1 || ((tsTariffDay2 > 0) && checkTimespan(timeinfo, tsTariffDay2));
+      #ifdef CONFIG_MULTI_TARIFF_INTERVAL_DAY_3
+        isT1 = isT1 || ((tsTariffDay3 > 0) && checkTimespan(timeinfo, tsTariffDay3));
+      #endif //CONFIG_MULTI_TARIFF_INTERVAL_DAY_3
+    #endif //CONFIG_MULTI_TARIFF_INTERVAL_DAY_2
+  #endif //CONFIG_MULTI_TARIFF_INTERVAL_DAY_1
+  
+  // Tariff 2
+  bool isT2 = false;
+  #ifdef CONFIG_MULTI_TARIFF_INTERVAL_SELF_1
+    isT2 = isT2 || ((tsTariffSelf1 > 0) && checkTimespan(timeinfo, tsTariffSelf1));
+    #ifdef CONFIG_MULTI_TARIFF_INTERVAL_SELF_2
+      isT2 = isT2 || ((tsTariffSelf2 > 0) && checkTimespan(timeinfo, tsTariffSelf2));
+      #ifdef CONFIG_MULTI_TARIFF_INTERVAL_SELF_3
+        isT2 = isT2 || ((tsTariffSelf3 > 0) && checkTimespan(timeinfo, tsTariffSelf3));
+      #endif //CONFIG_MULTI_TARIFF_INTERVAL_SELF_3
+    #endif //CONFIG_MULTI_TARIFF_INTERVAL_SELF_2
+  #endif //CONFIG_MULTI_TARIFF_INTERVAL_SELF_1
+  
+  // Tariff 3
+  bool isT3 = false;
+  #ifdef CONFIG_MULTI_TARIFF_INTERVAL_NIGHT_1
+    isT3 = isT3 || ((tsTariffNight1 > 0) && checkTimespan(timeinfo, tsTariffNight1));
+    #ifdef CONFIG_MULTI_TARIFF_INTERVAL_NIGHT_2
+      isT3 isT3 || ((tsTariffNight2 > 0) && checkTimespan(timeinfo, tsTariffNight2));
+      #ifdef CONFIG_MULTI_TARIFF_INTERVAL_NIGHT_3
+        isT3 isT3 || ((tsTariffNight3 > 0) && checkTimespan(timeinfo, tsTariffNight3));
+      #endif //CONFIG_MULTI_TARIFF_INTERVAL_NIGHT_3
+    #endif //CONFIG_MULTI_TARIFF_INTERVAL_NIGHT_2
+  #endif //CONFIG_MULTI_TARIFF_INTERVAL_NIGHT_1
+  
+  uint8_t newTariff = 1;
+  if (isT3) {
+    newTariff = 3;
+  } else if (isT2) {
+    newTariff = 2;
+  };
+
+  // If the tariff has changed
+  if (iTariff != newTariff) {
+    iTariff = newTariff;
+    rlog_i(tagMT, "Tariff %d activated", newTariff);
+    eventLoopPost(RE_TIME_EVENTS, RE_TIME_TARIFF_CHANGED, &newTariff, sizeof(newTariff), portMAX_DELAY);
+  };
+}
+
+void multiTariffCheckExternal()
+{
+  time_t nowT;
+  struct tm nowS;
+  nowT = time(nullptr);
+  localtime_r(&nowT, &nowS);
+  multiTariffCheck(nowS);
+}
+
+uint8_t multiTariffGetTariff()
+{
+  return iTariff;
+}
+
+#endif // CONFIG_MULTI_TARIFF_ENABLE
 
 // -----------------------------------------------------------------------------------------------------------------------
 // ------------------------------------------------------ Task exec ------------------------------------------------------
@@ -209,9 +399,13 @@ static void schedulerTaskExec(void* args)
         };
 
         // Check night (silent) mode
-        #if CONFIG_SILENT_MODE_ENABLE
+        #if defined(CONFIG_SILENT_MODE_ENABLE) && CONFIG_SILENT_MODE_ENABLE
         silentModeCheck(nowS);
         #endif // CONFIG_SILENT_MODE_ENABLE
+
+        #if defined(CONFIG_MULTI_TARIFF_ENABLE) && CONFIG_MULTI_TARIFF_ENABLE
+        multiTariffCheck(nowS);
+        #endif // CONFIG_MULTI_TARIFF_ENABLE
       };
     };
 
@@ -258,9 +452,12 @@ bool schedulerTaskCreate(bool createSuspended)
     }
     else {
       schedulerInit();
-      #if CONFIG_SILENT_MODE_ENABLE
+      #if defined(CONFIG_SILENT_MODE_ENABLE) && CONFIG_SILENT_MODE_ENABLE
       silentModeRegister();
       #endif // CONFIG_SILENT_MODE_ENABLE
+      #if defined(CONFIG_MULTI_TARIFF_ENABLE) && CONFIG_MULTI_TARIFF_ENABLE
+      multiTariffRegister();
+      #endif // CONFIG_MULTI_TARIFF_ENABLE
       if (createSuspended) {
         rloga_i("Task [ %s ] has been successfully created", schedulerTaskName);
         schedulerTaskSuspend();
@@ -327,25 +524,78 @@ static void schedulerEventHandlerTime(void* arg, esp_event_base_t event_base, in
   };
 }
 
-#if CONFIG_SILENT_MODE_ENABLE
+#if __SCHEDULER_REGISTER_PARAMS__
 
-static void schedulerEventHandlerSilentMode(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data)
+static void schedulerEventHandlerParams(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data)
 {
   if (event_id == RE_PARAMS_CHANGED)  {
-    if (*(uint32_t*)event_data == (uint32_t)&tsSilentMode) {
-      silentModeCheckExternal();
-    };
+    #if defined(CONFIG_SILENT_MODE_ENABLE) && CONFIG_SILENT_MODE_ENABLE
+      if (*(uint32_t*)event_data == (uint32_t)&tsSilentMode) {
+        silentModeCheckExternal();
+      };
+    #endif // CONFIG_SILENT_MODE_ENABLE
+
+    #if defined(CONFIG_MULTI_TARIFF_ENABLE) && CONFIG_MULTI_TARIFF_ENABLE
+      #ifdef CONFIG_MULTI_TARIFF_INTERVAL_DAY_1
+        if (*(uint32_t*)event_data == (uint32_t)&tsTariffDay1) {
+          multiTariffCheckExternal();
+        };
+      #endif // CONFIG_MULTI_TARIFF_INTERVAL_DAY_1
+      #ifdef CONFIG_MULTI_TARIFF_INTERVAL_DAY_2
+        if (*(uint32_t*)event_data == (uint32_t)&tsTariffDay2) {
+          multiTariffCheckExternal();
+        };
+      #endif // CONFIG_MULTI_TARIFF_INTERVAL_DAY_2
+      #ifdef CONFIG_MULTI_TARIFF_INTERVAL_DAY_3
+        if (*(uint32_t*)event_data == (uint32_t)&tsTariffDay3) {
+          multiTariffCheckExternal();
+        };
+      #endif // CONFIG_MULTI_TARIFF_INTERVAL_DAY_3
+
+      #ifdef CONFIG_MULTI_TARIFF_INTERVAL_SELF_1
+        if (*(uint32_t*)event_data == (uint32_t)&tsTariffSelf1) {
+          multiTariffCheckExternal();
+        };
+      #endif // CONFIG_MULTI_TARIFF_INTERVAL_SELF_1
+      #ifdef CONFIG_MULTI_TARIFF_INTERVAL_SELF_2
+        if (*(uint32_t*)event_data == (uint32_t)&tsTariffSelf2) {
+          multiTariffCheckExternal();
+        };
+      #endif // CONFIG_MULTI_TARIFF_INTERVAL_SELF_2
+      #ifdef CONFIG_MULTI_TARIFF_INTERVAL_SELF_3
+        if (*(uint32_t*)event_data == (uint32_t)&tsTariffSelf3) {
+          multiTariffCheckExternal();
+        };
+      #endif // CONFIG_MULTI_TARIFF_INTERVAL_SELF_3
+
+      #ifdef CONFIG_MULTI_TARIFF_INTERVAL_NIGHT_1
+        if (*(uint32_t*)event_data == (uint32_t)&tsTariffNight1) {
+          multiTariffCheckExternal();
+        };
+      #endif // CONFIG_MULTI_TARIFF_INTERVAL_NIGHT_1
+      #ifdef CONFIG_MULTI_TARIFF_INTERVAL_NIGHT_2
+        if (*(uint32_t*)event_data == (uint32_t)&tsTariffNight2) {
+          multiTariffCheckExternal();
+        };
+      #endif // CONFIG_MULTI_TARIFF_INTERVAL_NIGHT_2
+      #ifdef CONFIG_MULTI_TARIFF_INTERVAL_NIGHT_3
+        if (*(uint32_t*)event_data == (uint32_t)&tsTariffNight3) {
+          multiTariffCheckExternal();
+        };
+      #endif // CONFIG_MULTI_TARIFF_INTERVAL_NIGHT_3
+    #endif // CONFIG_MULTI_TARIFF_ENABLE
   };
 }
-#endif // CONFIG_SILENT_MODE_ENABLE
+
+#endif // __SCHEDULER_REGISTER_PARAMS__
 
 bool schedulerEventHandlerRegister()
 {
   bool ret = eventHandlerRegister(RE_TIME_EVENTS, RE_TIME_RTC_ENABLED, &schedulerEventHandlerTime, nullptr)
           && eventHandlerRegister(RE_TIME_EVENTS, RE_TIME_SNTP_SYNC_OK, &schedulerEventHandlerTime, nullptr);
-  #if CONFIG_SILENT_MODE_ENABLE
-    ret = ret && eventHandlerRegister(RE_PARAMS_EVENTS, RE_PARAMS_CHANGED, &schedulerEventHandlerSilentMode, nullptr);
-  #endif // CONFIG_SILENT_MODE_ENABLE
+  #if __SCHEDULER_REGISTER_PARAMS__
+    ret = ret && eventHandlerRegister(RE_PARAMS_EVENTS, RE_PARAMS_CHANGED, &schedulerEventHandlerParams, nullptr);
+  #endif // __SCHEDULER_REGISTER_PARAMS__
   #if CONFIG_MQTT_STATUS_ONLINE || CONFIG_MQTT_SYSINFO_ENABLE
     ret = ret && sysinfoEventHandlerRegister();
   #endif // CONFIG_MQTT_STATUS_ONLINE || CONFIG_MQTT_SYSINFO_ENABLE
@@ -356,9 +606,9 @@ void schedulerEventHandlerUnregister()
 {
   eventHandlerUnregister(RE_TIME_EVENTS, RE_TIME_RTC_ENABLED, &schedulerEventHandlerTime);
   eventHandlerUnregister(RE_TIME_EVENTS, RE_TIME_SNTP_SYNC_OK, &schedulerEventHandlerTime);
-  #if CONFIG_SILENT_MODE_ENABLE
-    eventHandlerUnregister(RE_PARAMS_EVENTS, RE_PARAMS_CHANGED, &schedulerEventHandlerSilentMode);
-  #endif // CONFIG_SILENT_MODE_ENABLE
+  #if __SCHEDULER_REGISTER_PARAMS__
+    eventHandlerUnregister(RE_PARAMS_EVENTS, RE_PARAMS_CHANGED, &schedulerEventHandlerParams);
+  #endif // __SCHEDULER_REGISTER_PARAMS__
   #if CONFIG_MQTT_STATUS_ONLINE || CONFIG_MQTT_SYSINFO_ENABLE
     sysinfoEventHandlerUnregister();
   #endif // CONFIG_MQTT_STATUS_ONLINE || CONFIG_MQTT_SYSINFO_ENABLE

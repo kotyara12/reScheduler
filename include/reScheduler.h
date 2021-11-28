@@ -31,9 +31,13 @@ bool schedulerEventHandlerRegister();
 void schedulerEventHandlerUnregister();
 
 // Silent mode
-#if CONFIG_SILENT_MODE_ENABLE
+#if defined(CONFIG_SILENT_MODE_ENABLE) && CONFIG_SILENT_MODE_ENABLE
 bool isSilentMode();
 #endif // CONFIG_SILENT_MODE_ENABLE
+
+#if defined(CONFIG_MULTI_TARIFF_ENABLE) && CONFIG_MULTI_TARIFF_ENABLE
+uint8_t multiTariffGetTariff();
+#endif // CONFIG_MULTI_TARIFF_ENABLE
 
 #ifdef __cplusplus
 }
