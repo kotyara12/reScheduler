@@ -305,20 +305,20 @@ static void schedulerTaskExec(void* args)
       minLast = nowS.tm_min;
 
       // Publish an event every minute
-      eventLoopPost(RE_TIME_EVENTS, RE_TIME_EVERY_MINUTE, nowS.tm_min, sizeof(int), portMAX_DELAY);
+      eventLoopPost(RE_TIME_EVENTS, RE_TIME_EVERY_MINUTE, &nowS.tm_min, sizeof(int), portMAX_DELAY);
 
       // Publish an event about beginning of next interval
       if (nowS.tm_min == 0) {
-        eventLoopPost(RE_TIME_EVENTS, RE_TIME_START_OF_HOUR, nowS.tm_hour, sizeof(int), portMAX_DELAY);
+        eventLoopPost(RE_TIME_EVENTS, RE_TIME_START_OF_HOUR, &nowS.tm_hour, sizeof(int), portMAX_DELAY);
         if (nowS.tm_hour == 0) {
-          eventLoopPost(RE_TIME_EVENTS, RE_TIME_START_OF_DAY, nowS.tm_mday, sizeof(int), portMAX_DELAY);
+          eventLoopPost(RE_TIME_EVENTS, RE_TIME_START_OF_DAY, &nowS.tm_mday, sizeof(int), portMAX_DELAY);
           if (nowS.tm_wday == CONFIG_FORMAT_FIRST_DAY_OF_WEEK) {
-            eventLoopPost(RE_TIME_EVENTS, RE_TIME_START_OF_WEEK, nowS.tm_wday, sizeof(int), portMAX_DELAY);
+            eventLoopPost(RE_TIME_EVENTS, RE_TIME_START_OF_WEEK, &nowS.tm_wday, sizeof(int), portMAX_DELAY);
           };
           if (nowS.tm_mday == 1) {
-            eventLoopPost(RE_TIME_EVENTS, RE_TIME_START_OF_MONTH, nowS.tm_mon, sizeof(int), portMAX_DELAY);
+            eventLoopPost(RE_TIME_EVENTS, RE_TIME_START_OF_MONTH, &nowS.tm_mon, sizeof(int), portMAX_DELAY);
             if (nowS.tm_mon == 1) {
-              eventLoopPost(RE_TIME_EVENTS, RE_TIME_START_OF_YEAR, nowS.tm_year, sizeof(int), portMAX_DELAY);
+              eventLoopPost(RE_TIME_EVENTS, RE_TIME_START_OF_YEAR, &nowS.tm_year, sizeof(int), portMAX_DELAY);
             };
           };
         };
