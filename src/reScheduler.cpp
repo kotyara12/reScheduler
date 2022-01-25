@@ -300,7 +300,6 @@ bool schedulerTaskResume()
   return false;
 }
 
-
 void schedulerTaskDelete()
 {
   if (_schedulerTask) {
@@ -313,7 +312,7 @@ void schedulerTaskDelete()
 }
 
 // -----------------------------------------------------------------------------------------------------------------------
-// ------------------------------------------------ Set time event handler -----------------------------------------------
+// ---------------------------------------------------- Еvent handlers ---------------------------------------------------
 // -----------------------------------------------------------------------------------------------------------------------
 
 static void schedulerEventHandlerTime(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data)
@@ -322,6 +321,18 @@ static void schedulerEventHandlerTime(void* arg, esp_event_base_t event_base, in
     schedulerTaskResume();
   } else {
     schedulerTaskCreate(false);
+  };
+}
+
+static void schedulerOtaEventHandler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data)
+{
+  if ((event_id == RE_SYS_OTA) && (event_data)) {
+    re_system_event_data_t* data = (re_system_event_data_t*)event_data;
+    if (data->type == RE_SYS_SET) {
+      schedulerTaskSuspend();
+    } else {
+      schedulerTaskResume();
+    };
   };
 }
 
@@ -341,7 +352,8 @@ static void schedulerEventHandlerParams(void* arg, esp_event_base_t event_base, 
 bool schedulerEventHandlerRegister()
 {
   bool ret = eventHandlerRegister(RE_TIME_EVENTS, RE_TIME_RTC_ENABLED, &schedulerEventHandlerTime, nullptr)
-          && eventHandlerRegister(RE_TIME_EVENTS, RE_TIME_SNTP_SYNC_OK, &schedulerEventHandlerTime, nullptr);
+          && eventHandlerRegister(RE_TIME_EVENTS, RE_TIME_SNTP_SYNC_OK, &schedulerEventHandlerTime, nullptr)
+          && eventHandlerRegister(RE_SYSTEM_EVENTS, RE_SYS_OTA, &schedulerOtaEventHandler, nullptr);
   #if defined(CONFIG_SILENT_MODE_ENABLE) && CONFIG_SILENT_MODE_ENABLE
     ret = ret && eventHandlerRegister(RE_PARAMS_EVENTS, RE_PARAMS_CHANGED, &schedulerEventHandlerParams, nullptr);
   #endif // defined(CONFIG_SILENT_MODE_ENABLE) && CONFIG_SILENT_MODE_ENABLE
