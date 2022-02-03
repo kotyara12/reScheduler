@@ -20,7 +20,7 @@ extern "C" {
 
 bool schedulerInit();
 void schedulerFree();
-void schedulerRegister(timespan_t* timespan, uint32_t value);
+bool schedulerRegister(timespan_t* timespan, uint32_t value);
 
 bool schedulerTaskCreate(bool createSuspended);
 bool schedulerTaskSuspend();

@@ -43,14 +43,9 @@ static schedulerItemHeadHandle_t schedulerItems = nullptr;
 bool schedulerInit()
 {
   if (!schedulerItems) {
-    schedulerItems = (schedulerItemHeadHandle_t)calloc(1, sizeof(schedulerItemHead_t));
-    if (schedulerItems) {
-      STAILQ_INIT(schedulerItems);
-    }
-    else {
-      rlog_e(logTAG, "Scheduler initialization error!");
-      return false;
-    }
+    schedulerItems = (schedulerItemHeadHandle_t)esp_calloc(1, sizeof(schedulerItemHead_t));
+    RE_MEM_CHECK(logTAG, schedulerItems, return false);
+    STAILQ_INIT(schedulerItems);
   };
   return true;
 }
@@ -68,17 +63,18 @@ void schedulerFree()
   };
 }
 
-void schedulerRegister(timespan_t* timespan, uint32_t value)
+bool schedulerRegister(timespan_t* timespan, uint32_t value)
 {
   if (schedulerItems) {
-    schedulerItemHandle_t item = (schedulerItemHandle_t)calloc(1, sizeof(schedulerItem_t));
-    if (item) {
-      item->timespan = timespan;
-      item->value = value;
-      item->state = -1;
-      STAILQ_INSERT_TAIL(schedulerItems, item, next);
-    };
+    schedulerItemHandle_t item = (schedulerItemHandle_t)esp_calloc(1, sizeof(schedulerItem_t));
+    RE_MEM_CHECK(logTAG, item, return false);
+    item->timespan = timespan;
+    item->value = value;
+    item->state = -1;
+    STAILQ_INSERT_TAIL(schedulerItems, item, next);
+    return true;
   };
+  return false;
 }
 
 // -----------------------------------------------------------------------------------------------------------------------
