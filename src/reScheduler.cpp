@@ -5,6 +5,7 @@
 #include "rTypes.h"
 #include "reNvs.h"
 #include "reEsp32.h"
+#include "esp_timer.h"
 #include "reParams.h"
 #include "sys/queue.h"
 #include "project_config.h"
@@ -16,14 +17,6 @@
 #endif // CONFIG_MQTT_STATUS_ONLINE || CONFIG_MQTT_SYSINFO_ENABLE
 
 static const char* logTAG = "SCHD";
-static const char* schedulerTaskName = "scheduler";
-
-TaskHandle_t _schedulerTask;
-
-#if CONFIG_SCHEDULER_STATIC_ALLOCATION
-StaticTask_t _schedulerTaskBuffer;
-StackType_t _schedulerTaskStack[CONFIG_SCHEDULER_STACK_SIZE];
-#endif // CONFIG_SCHEDULER_STATIC_ALLOCATION
 
 typedef struct schedulerItem_t {
   timespan_t* timespan;
@@ -35,6 +28,15 @@ typedef struct schedulerItem_t *schedulerItemHandle_t;
 STAILQ_HEAD(schedulerItemHead_t, schedulerItem_t);
 typedef struct schedulerItemHead_t *schedulerItemHeadHandle_t;
 static schedulerItemHeadHandle_t schedulerItems = nullptr;
+
+static bool _handlersRegistered = false;
+static esp_timer_handle_t _schedulerTimerMain = nullptr;
+#if CONFIG_MQTT_STATUS_ONLINE || CONFIG_MQTT_SYSINFO_ENABLE
+static esp_timer_handle_t _schedulerTimerSysInfo = nullptr;
+#endif // CONFIG_MQTT_STATUS_ONLINE || CONFIG_MQTT_SYSINFO_ENABLE
+#if CONFIG_MQTT_TASKLIST_ENABLE
+static esp_timer_handle_t _schedulerTimerTasks = nullptr;
+#endif // CONFIG_MQTT_TASKLIST_ENABLE
 
 // -----------------------------------------------------------------------------------------------------------------------
 // ------------------------------------------------- Common functions ----------------------------------------------------
@@ -94,7 +96,7 @@ void silentModeRegister()
     CONFIG_MQTT_PARAMS_QOS, (void*)&tsSilentMode);
 }
 
-void silentModeCheck(const struct tm timeinfo)
+void silentModeCheck(struct tm* timeinfo)
 {
   if (tsSilentMode > 0) {
     bool newSilentMode = checkTimespan(timeinfo, tsSilentMode);
@@ -118,7 +120,7 @@ void silentModeCheckExternal()
   struct tm nowS;
   nowT = time(nullptr);
   localtime_r(&nowT, &nowS);
-  silentModeCheck(nowS);
+  silentModeCheck(&nowS);
 }
 
 bool isSilentMode()
@@ -129,183 +131,240 @@ bool isSilentMode()
 #endif // CONFIG_SILENT_MODE_ENABLE
 
 // -----------------------------------------------------------------------------------------------------------------------
-// ------------------------------------------------------ Task exec ------------------------------------------------------
+// ------------------------------------------------------ Main Timer -----------------------------------------------------
 // -----------------------------------------------------------------------------------------------------------------------
 
-static void schedulerTaskExec(void* args)
+static void schedulerTimerMainExec(struct tm* nowS, bool isCorrectTime)
 {
-  static time_t nowT;
-  static struct tm nowS;
-  static uint8_t minLast = 255;
+  // Publish an event every minute
+  eventLoopPost(RE_TIME_EVENTS, RE_TIME_EVERY_MINUTE, &nowS->tm_min, sizeof(int), portMAX_DELAY);
 
-  #if CONFIG_MQTT_STATUS_ONLINE || CONFIG_MQTT_SYSINFO_ENABLE
-  static esp_timer_t timerSysInfo;
-  timerSet(&timerSysInfo, CONFIG_MQTT_SYSINFO_INTERVAL);
-  #endif // CONFIG_MQTT_STATUS_ONLINE || CONFIG_MQTT_SYSINFO_ENABLE
-  #if CONFIG_MQTT_TASKLIST_ENABLE
-  static esp_timer_t timerTaskList;
-  timerSet(&timerTaskList, CONFIG_MQTT_TASKLIST_INTERVAL);
-  #endif // CONFIG_MQTT_TASKLIST_ENABLE
+  // Publish an event about beginning of next interval
+  if (nowS->tm_min == 0) {
+    eventLoopPost(RE_TIME_EVENTS, RE_TIME_START_OF_HOUR, &nowS->tm_hour, sizeof(int), portMAX_DELAY);
+    if (nowS->tm_hour == 0) {
+      eventLoopPost(RE_TIME_EVENTS, RE_TIME_START_OF_DAY, &nowS->tm_mday, sizeof(int), portMAX_DELAY);
+      if (nowS->tm_wday == CONFIG_FORMAT_FIRST_DAY_OF_WEEK) {
+        eventLoopPost(RE_TIME_EVENTS, RE_TIME_START_OF_WEEK, &nowS->tm_wday, sizeof(int), portMAX_DELAY);
+      };
+      if (nowS->tm_mday == 1) {
+        eventLoopPost(RE_TIME_EVENTS, RE_TIME_START_OF_MONTH, &nowS->tm_mon, sizeof(int), portMAX_DELAY);
+        if (nowS->tm_mon == 1) {
+          eventLoopPost(RE_TIME_EVENTS, RE_TIME_START_OF_YEAR, &nowS->tm_year, sizeof(int), portMAX_DELAY);
+        };
+      };
+    };
+  };
 
-  while (true) {
-    // Get the current time
-    nowT = time(nullptr);
-    localtime_r(&nowT, &nowS);
-    if (nowS.tm_min != minLast) {
-      minLast = nowS.tm_min;
+  // Calculate the operating time of the device
+  sysinfoWorkTimeInc();
 
-      // Publish an event every minute
-      eventLoopPost(RE_TIME_EVENTS, RE_TIME_EVERY_MINUTE, &nowS.tm_min, sizeof(int), portMAX_DELAY);
+  if (isCorrectTime) {
+    // Create strings with date and time
+    sysinfoFixDateTime(nowS);
 
-      // Publish an event about beginning of next interval
-      if (nowS.tm_min == 0) {
-        eventLoopPost(RE_TIME_EVENTS, RE_TIME_START_OF_HOUR, &nowS.tm_hour, sizeof(int), portMAX_DELAY);
-        if (nowS.tm_hour == 0) {
-          eventLoopPost(RE_TIME_EVENTS, RE_TIME_START_OF_DAY, &nowS.tm_mday, sizeof(int), portMAX_DELAY);
-          if (nowS.tm_wday == CONFIG_FORMAT_FIRST_DAY_OF_WEEK) {
-            eventLoopPost(RE_TIME_EVENTS, RE_TIME_START_OF_WEEK, &nowS.tm_wday, sizeof(int), portMAX_DELAY);
-          };
-          if (nowS.tm_mday == 1) {
-            eventLoopPost(RE_TIME_EVENTS, RE_TIME_START_OF_MONTH, &nowS.tm_mon, sizeof(int), portMAX_DELAY);
-            if (nowS.tm_mon == 1) {
-              eventLoopPost(RE_TIME_EVENTS, RE_TIME_START_OF_YEAR, &nowS.tm_year, sizeof(int), portMAX_DELAY);
-            };
+    // Post generated strings with date and time
+    #if CONFIG_MQTT_TIME_ENABLE
+    mqttPublishDateTime(nowS);
+    #endif // CONFIG_MQTT_TIME_ENABLE
+
+    // Check schedule list
+    if (schedulerItems) {
+      schedulerItemHandle_t item;
+      STAILQ_FOREACH(item, schedulerItems, next) {
+        int8_t newState = checkTimespan(nowS, *item->timespan);
+        if (newState != item->state) {
+          item->state = newState;
+          if (newState == 1) {
+            eventLoopPost(RE_TIME_EVENTS, RE_TIME_TIMESPAN_ON, (void*)item->value, sizeof(item->value), portMAX_DELAY);
+          } else {
+            eventLoopPost(RE_TIME_EVENTS, RE_TIME_TIMESPAN_OFF, (void*)item->value, sizeof(item->value), portMAX_DELAY);
           };
         };
       };
-
-      // Calculate the operating time of the device
-      sysinfoWorkTimeInc();
-
-      if (nowT > 1000000000) {
-        // Create strings with date and time
-        sysinfoFixDateTime(nowS);
-
-        // Post generated strings with date and time
-        #if CONFIG_MQTT_TIME_ENABLE
-        mqttPublishDateTime(nowS);
-        #endif // CONFIG_MQTT_TIME_ENABLE
-
-        // Check schedule list
-        if (schedulerItems) {
-          schedulerItemHandle_t item;
-          STAILQ_FOREACH(item, schedulerItems, next) {
-            int8_t newState = checkTimespan(nowS, *item->timespan);
-            if (newState != item->state) {
-              item->state = newState;
-              if (newState == 1) {
-                eventLoopPost(RE_TIME_EVENTS, RE_TIME_TIMESPAN_ON, (void*)item->value, sizeof(item->value), portMAX_DELAY);
-              } else {
-                eventLoopPost(RE_TIME_EVENTS, RE_TIME_TIMESPAN_OFF, (void*)item->value, sizeof(item->value), portMAX_DELAY);
-              };
-            };
-          };
-        };
-
-        // Check night (silent) mode
-        #if defined(CONFIG_SILENT_MODE_ENABLE) && CONFIG_SILENT_MODE_ENABLE
-        silentModeCheck(nowS);
-        #endif // CONFIG_SILENT_MODE_ENABLE
-      };
     };
 
-    // Publish system information
-    #if CONFIG_MQTT_STATUS_ONLINE || CONFIG_MQTT_SYSINFO_ENABLE || CONFIG_EVENT_LOOP_STATISTIC_ENABLED
-    if (timerTimeout(&timerSysInfo)) {
-      timerSet(&timerSysInfo, CONFIG_MQTT_SYSINFO_INTERVAL);
-      
-      #if CONFIG_MQTT_STATUS_ONLINE || CONFIG_MQTT_SYSINFO_ENABLE
-      sysinfoPublishSysInfo();
-      #endif // CONFIG_MQTT_STATUS_ONLINE || CONFIG_MQTT_SYSINFO_ENABLE
-    };
-    #endif // CONFIG_MQTT_STATUS_ONLINE || CONFIG_MQTT_SYSINFO_ENABLE || CONFIG_EVENT_LOOP_STATISTIC_ENABLED
-
-    #if CONFIG_MQTT_TASKLIST_ENABLE
-    if (timerTimeout(&timerTaskList)) {
-      timerSet(&timerTaskList, CONFIG_MQTT_TASKLIST_INTERVAL);
-      sysinfoPublishTaskList();
-    };
-    #endif // CONFIG_MQTT_TASKLIST_ENABLE
-
-    vTaskDelay(CONFIG_SCHEDULER_DELAY);
+    // Check night (silent) mode
+    #if defined(CONFIG_SILENT_MODE_ENABLE) && CONFIG_SILENT_MODE_ENABLE
+    silentModeCheck(nowS);
+    #endif // CONFIG_SILENT_MODE_ENABLE
   };
+}
 
-  schedulerTaskDelete();
+static void schedulerTimerMainTimeout(void* arg)
+{
+  static struct timeval now_time;
+  static struct tm now_tm;
+  
+  // Get current time
+  gettimeofday(&now_time, nullptr);
+  localtime_r(&now_time.tv_sec, &now_tm);
+  
+  // Process schedules
+  schedulerTimerMainExec(&now_tm, now_time.tv_sec > 1000000000);
+
+  // Calculate the timeout until the beginning of the next minute
+  gettimeofday(&now_time, nullptr);
+  localtime_r(&now_time.tv_sec, &now_tm);
+  uint32_t timeout_us = ((int)60 - (int)now_tm.tm_sec) * 1000000 - now_time.tv_usec;
+  RE_OK_CHECK(logTAG, esp_timer_start_once(_schedulerTimerMain, timeout_us), return);
+  rlog_d(logTAG, "Restart schedule timer for %d microseconds (sec=%d, usec=%d)", timeout_us, (int)now_tm.tm_sec, now_time.tv_usec);  
+}
+
+static bool schedulerTimerMainCreate()
+{
+  if (!_schedulerTimerMain) {
+    esp_timer_create_args_t cfgTimer;
+    memset(&cfgTimer, 0, sizeof(cfgTimer));
+    cfgTimer.name = "scheduler_main";
+    cfgTimer.callback = schedulerTimerMainTimeout;
+    RE_OK_CHECK(logTAG, esp_timer_create(&cfgTimer, &_schedulerTimerMain), return false);
+    if (_schedulerTimerMain) {
+      RE_OK_CHECK(logTAG, esp_timer_start_once(_schedulerTimerMain, 1000000), return false);
+    };
+    return true;
+  };
+  return false;
+}
+
+static void schedulerTimerMainDelete()
+{
+  if (_schedulerTimerMain) {
+    if (esp_timer_is_active(_schedulerTimerMain)) {
+      esp_timer_stop(_schedulerTimerMain);
+    };
+    RE_OK_CHECK(logTAG, esp_timer_delete(_schedulerTimerMain), return);
+    _schedulerTimerMain = nullptr;
+  };
 }
 
 // -----------------------------------------------------------------------------------------------------------------------
-// ---------------------------------------------------- Task routines ----------------------------------------------------
+// ----------------------------------------------------- Status Timer ----------------------------------------------------
 // -----------------------------------------------------------------------------------------------------------------------
 
-bool schedulerTaskCreate(bool createSuspended)
+#if CONFIG_MQTT_STATUS_ONLINE || CONFIG_MQTT_SYSINFO_ENABLE
+
+static void schedulerTimerSysInfoExec(void* arg)
 {
-  if (!_schedulerTask) {
-    // Create the scheduler task
-    #if CONFIG_SCHEDULER_STATIC_ALLOCATION
-    _schedulerTask = xTaskCreateStaticPinnedToCore(schedulerTaskExec, schedulerTaskName, CONFIG_SCHEDULER_STACK_SIZE, NULL, CONFIG_SCHEDULER_PRIORITY, _schedulerTaskStack, &_schedulerTaskBuffer, CONFIG_SCHEDULER_CORE); 
-    #else
-    xTaskCreatePinnedToCore(schedulerTaskExec, schedulerTaskName, CONFIG_SCHEDULER_STACK_SIZE, NULL, CONFIG_SCHEDULER_PRIORITY, &_schedulerTask, CONFIG_SCHEDULER_CORE); 
-    #endif // CONFIG_SCHEDULER_STATIC_ALLOCATION
-    if (!_schedulerTask) {
-      rloga_e("Failed to create scheduler task!");
-      return false;
-    }
-    else {
-      schedulerInit();
-      #if defined(CONFIG_SILENT_MODE_ENABLE) && CONFIG_SILENT_MODE_ENABLE
-      silentModeRegister();
-      #endif // CONFIG_SILENT_MODE_ENABLE
-      if (createSuspended) {
-        rloga_i("Task [ %s ] has been successfully created", schedulerTaskName);
-        schedulerTaskSuspend();
-        return schedulerEventHandlerRegister();
-      } else {
-        rloga_i("Task [ %s ] has been successfully started", schedulerTaskName);
-        return true;
+  sysinfoPublishSysInfo();
+}
+
+static bool schedulerTimerSysInfoStart()
+{
+  if (_schedulerTimerSysInfo) {
+    RE_OK_CHECK(logTAG, esp_timer_start_periodic(_schedulerTimerSysInfo, CONFIG_MQTT_SYSINFO_INTERVAL * 1000), return false);
+    rlog_i(logTAG, "Timer [scheduler_sysinfo] was started");
+    return true;
+  };
+  return false;
+}
+
+static bool schedulerTimerSysInfoCreate(bool createSuspened)
+{
+  if (!_schedulerTimerSysInfo) {
+    esp_timer_create_args_t cfgTimer;
+    memset(&cfgTimer, 0, sizeof(cfgTimer));
+    cfgTimer.name = "scheduler_sysinfo";
+    cfgTimer.callback = schedulerTimerSysInfoExec;
+    RE_OK_CHECK(logTAG, esp_timer_create(&cfgTimer, &_schedulerTimerSysInfo), return false);
+    if (!createSuspened) {
+      return schedulerTimerSysInfoStart();
+    };
+    return true;
+  };
+  return false;
+}
+
+static bool schedulerTimerSysInfoStop()
+{
+  if (_schedulerTimerSysInfo) {
+    if (esp_timer_is_active(_schedulerTimerSysInfo)) {
+      if (esp_timer_stop(_schedulerTimerSysInfo) == ESP_OK) {
+        rlog_i(logTAG, "Timer [scheduler_sysinfo] was stopped");
       };
     };
+    return true;
   };
   return false;
 }
 
-bool schedulerTaskSuspend()
+static void schedulerTimerSysInfoDelete()
 {
-  if ((_schedulerTask) && (eTaskGetState(_schedulerTask) != eSuspended)) {
-    vTaskSuspend(_schedulerTask);
-    if (eTaskGetState(_schedulerTask) == eSuspended) {
-      rloga_d("Task [ %s ] has been suspended", schedulerTaskName);
-      return true;
-    } else {
-      rloga_e("Failed to suspend task [ %s ]!", schedulerTaskName);
+  if (_schedulerTimerSysInfo) {
+    if (esp_timer_is_active(_schedulerTimerSysInfo)) {
+      esp_timer_stop(_schedulerTimerSysInfo);
     };
+    RE_OK_CHECK(logTAG, esp_timer_delete(_schedulerTimerSysInfo), return);
+    _schedulerTimerSysInfo = nullptr;
+    rlog_i(logTAG, "Timer [scheduler_sysinfo] was deleted");
+  };
+}
+
+#endif // CONFIG_MQTT_STATUS_ONLINE || CONFIG_MQTT_SYSINFO_ENABLE
+
+// -----------------------------------------------------------------------------------------------------------------------
+// ---------------------------------------------------- TaskList Timer ---------------------------------------------------
+// -----------------------------------------------------------------------------------------------------------------------
+
+#if CONFIG_MQTT_TASKLIST_ENABLE
+
+static void schedulerTimerTasksExec(void* arg)
+{
+  sysinfoPublishTaskList();
+}
+
+static bool schedulerTimerTasksStart()
+{
+  if (_schedulerTimerTasks) {
+    RE_OK_CHECK(logTAG, esp_timer_start_periodic(_schedulerTimerTasks, CONFIG_MQTT_TASKLIST_INTERVAL * 1000), return false);
+    rlog_i(logTAG, "Timer [scheduler_tasks] was started");
+    return true;
   };
   return false;
 }
 
-bool schedulerTaskResume()
+static bool schedulerTimerTasksCreate(bool createSuspened)
 {
-  if ((_schedulerTask) && (eTaskGetState(_schedulerTask) == eSuspended)) {
-    vTaskResume(_schedulerTask);
-    if (eTaskGetState(_schedulerTask) != eSuspended) {
-      rloga_i("Task [ %s ] has been successfully resumed", schedulerTaskName);
-      return true;
-    } else {
-      rloga_e("Failed to resume task [ %s ]!", schedulerTaskName);
+  if (!_schedulerTimerTasks) {
+    esp_timer_create_args_t cfgTimer;
+    memset(&cfgTimer, 0, sizeof(cfgTimer));
+    cfgTimer.name = "scheduler_tasks";
+    cfgTimer.callback = schedulerTimerTasksExec;
+    RE_OK_CHECK(logTAG, esp_timer_create(&cfgTimer, &_schedulerTimerTasks), return false);
+    if (!createSuspened) {
+      return schedulerTimerTasksStart();
     };
+    return true;
   };
   return false;
 }
 
-void schedulerTaskDelete()
+static bool schedulerTimerTasksStop()
 {
-  if (_schedulerTask) {
-    schedulerEventHandlerUnregister();
-    vTaskDelete(_schedulerTask);
-    _schedulerTask = nullptr;
-    schedulerFree();
-    rloga_d("Task [ %s ] was deleted", schedulerTaskName);
+  if (_schedulerTimerTasks) {
+    if (esp_timer_is_active(_schedulerTimerTasks)) {
+      if (esp_timer_stop(_schedulerTimerTasks) == ESP_OK) {
+        rlog_i(logTAG, "Timer [scheduler_tasks] was stopped");
+      };
+    };
+    return true;
+  };
+  return false;
+}
+
+static void schedulerTimerTasksDelete()
+{
+  if (_schedulerTimerTasks) {
+    if (esp_timer_is_active(_schedulerTimerTasks)) {
+      esp_timer_stop(_schedulerTimerTasks);
+    };
+    RE_OK_CHECK(logTAG, esp_timer_delete(_schedulerTimerTasks), return);
+    _schedulerTimerTasks = nullptr;
+    rlog_i(logTAG, "Timer [scheduler_tasks] was deleted");
   };
 }
+
+#endif // CONFIG_MQTT_TASKLIST_ENABLE
 
 // -----------------------------------------------------------------------------------------------------------------------
 // ---------------------------------------------------- Еvent handlers ---------------------------------------------------
@@ -313,10 +372,10 @@ void schedulerTaskDelete()
 
 static void schedulerEventHandlerTime(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data)
 {
-  if (_schedulerTask) {
-    schedulerTaskResume();
+  if (_schedulerTimerMain) {
+    schedulerResume();
   } else {
-    schedulerTaskCreate(false);
+    schedulerStart(false);
   };
 }
 
@@ -325,9 +384,9 @@ static void schedulerOtaEventHandler(void* arg, esp_event_base_t event_base, int
   if ((event_id == RE_SYS_OTA) && (event_data)) {
     re_system_event_data_t* data = (re_system_event_data_t*)event_data;
     if (data->type == RE_SYS_SET) {
-      schedulerTaskSuspend();
+      schedulerSuspend();
     } else {
-      schedulerTaskResume();
+      schedulerResume();
     };
   };
 }
@@ -347,26 +406,91 @@ static void schedulerEventHandlerParams(void* arg, esp_event_base_t event_base, 
 
 bool schedulerEventHandlerRegister()
 {
-  bool ret = eventHandlerRegister(RE_TIME_EVENTS, RE_TIME_RTC_ENABLED, &schedulerEventHandlerTime, nullptr)
-          && eventHandlerRegister(RE_TIME_EVENTS, RE_TIME_SNTP_SYNC_OK, &schedulerEventHandlerTime, nullptr)
-          && eventHandlerRegister(RE_SYSTEM_EVENTS, RE_SYS_OTA, &schedulerOtaEventHandler, nullptr);
-  #if defined(CONFIG_SILENT_MODE_ENABLE) && CONFIG_SILENT_MODE_ENABLE
-    ret = ret && eventHandlerRegister(RE_PARAMS_EVENTS, RE_PARAMS_CHANGED, &schedulerEventHandlerParams, nullptr);
-  #endif // defined(CONFIG_SILENT_MODE_ENABLE) && CONFIG_SILENT_MODE_ENABLE
-  #if CONFIG_MQTT_STATUS_ONLINE || CONFIG_MQTT_SYSINFO_ENABLE
-    ret = ret && sysinfoEventHandlerRegister();
-  #endif // CONFIG_MQTT_STATUS_ONLINE || CONFIG_MQTT_SYSINFO_ENABLE
-  return ret;
+  if (!_handlersRegistered) {
+    _handlersRegistered = eventHandlerRegister(RE_TIME_EVENTS, RE_TIME_RTC_ENABLED, &schedulerEventHandlerTime, nullptr)
+            && eventHandlerRegister(RE_TIME_EVENTS, RE_TIME_SNTP_SYNC_OK, &schedulerEventHandlerTime, nullptr)
+            && eventHandlerRegister(RE_SYSTEM_EVENTS, RE_SYS_OTA, &schedulerOtaEventHandler, nullptr);
+    #if defined(CONFIG_SILENT_MODE_ENABLE) && CONFIG_SILENT_MODE_ENABLE
+      _handlersRegistered = _handlersRegistered && eventHandlerRegister(RE_PARAMS_EVENTS, RE_PARAMS_CHANGED, &schedulerEventHandlerParams, nullptr);
+    #endif // defined(CONFIG_SILENT_MODE_ENABLE) && CONFIG_SILENT_MODE_ENABLE
+    #if CONFIG_MQTT_STATUS_ONLINE || CONFIG_MQTT_SYSINFO_ENABLE
+      _handlersRegistered = _handlersRegistered && sysinfoEventHandlerRegister();
+    #endif // CONFIG_MQTT_STATUS_ONLINE || CONFIG_MQTT_SYSINFO_ENABLE
+  };
+  return _handlersRegistered;
 }
 
 void schedulerEventHandlerUnregister()
 {
-  eventHandlerUnregister(RE_TIME_EVENTS, RE_TIME_RTC_ENABLED, &schedulerEventHandlerTime);
-  eventHandlerUnregister(RE_TIME_EVENTS, RE_TIME_SNTP_SYNC_OK, &schedulerEventHandlerTime);
-  #if defined(CONFIG_SILENT_MODE_ENABLE) && CONFIG_SILENT_MODE_ENABLE
-    eventHandlerUnregister(RE_PARAMS_EVENTS, RE_PARAMS_CHANGED, &schedulerEventHandlerParams);
-  #endif // defined(CONFIG_SILENT_MODE_ENABLE) && CONFIG_SILENT_MODE_ENABLE
-  #if CONFIG_MQTT_STATUS_ONLINE || CONFIG_MQTT_SYSINFO_ENABLE
-    sysinfoEventHandlerUnregister();
-  #endif // CONFIG_MQTT_STATUS_ONLINE || CONFIG_MQTT_SYSINFO_ENABLE
+  if (_handlersRegistered) {
+    _handlersRegistered = false;
+    eventHandlerUnregister(RE_TIME_EVENTS, RE_TIME_RTC_ENABLED, &schedulerEventHandlerTime);
+    eventHandlerUnregister(RE_TIME_EVENTS, RE_TIME_SNTP_SYNC_OK, &schedulerEventHandlerTime);
+    #if defined(CONFIG_SILENT_MODE_ENABLE) && CONFIG_SILENT_MODE_ENABLE
+      eventHandlerUnregister(RE_PARAMS_EVENTS, RE_PARAMS_CHANGED, &schedulerEventHandlerParams);
+    #endif // defined(CONFIG_SILENT_MODE_ENABLE) && CONFIG_SILENT_MODE_ENABLE
+    #if CONFIG_MQTT_STATUS_ONLINE || CONFIG_MQTT_SYSINFO_ENABLE
+      sysinfoEventHandlerUnregister();
+    #endif // CONFIG_MQTT_STATUS_ONLINE || CONFIG_MQTT_SYSINFO_ENABLE
+  };
 }
+
+// -----------------------------------------------------------------------------------------------------------------------
+// ---------------------------------------------------- Task routines ----------------------------------------------------
+// -----------------------------------------------------------------------------------------------------------------------
+
+bool schedulerStart(bool createSuspended)
+{
+  bool ret = false;
+  if (!_schedulerTimerMain) {
+    ret = schedulerInit() && schedulerTimerMainCreate() && schedulerEventHandlerRegister();
+    #if CONFIG_MQTT_STATUS_ONLINE || CONFIG_MQTT_SYSINFO_ENABLE
+      ret = ret && schedulerTimerSysInfoCreate(createSuspended);
+    #endif // CONFIG_MQTT_STATUS_ONLINE || CONFIG_MQTT_SYSINFO_ENABLE
+    #if CONFIG_MQTT_TASKLIST_ENABLE
+      ret = ret && schedulerTimerTasksCreate(createSuspended);
+    #endif // CONFIG_MQTT_TASKLIST_ENABLE
+  };
+  if (!ret) {
+    schedulerDelete();
+  };
+  return ret;
+}
+
+bool schedulerSuspend()
+{
+  bool ret = true;
+  #if CONFIG_MQTT_STATUS_ONLINE || CONFIG_MQTT_SYSINFO_ENABLE
+    ret = ret && schedulerTimerSysInfoStop();
+  #endif // CONFIG_MQTT_STATUS_ONLINE || CONFIG_MQTT_SYSINFO_ENABLE
+    #if CONFIG_MQTT_TASKLIST_ENABLE
+      ret = ret && schedulerTimerTasksStop();
+    #endif // CONFIG_MQTT_TASKLIST_ENABLE
+  return ret;
+}
+
+bool schedulerResume()
+{
+  bool ret = true;
+  #if CONFIG_MQTT_STATUS_ONLINE || CONFIG_MQTT_SYSINFO_ENABLE
+    ret = ret && schedulerTimerSysInfoStart();
+  #endif // CONFIG_MQTT_STATUS_ONLINE || CONFIG_MQTT_SYSINFO_ENABLE
+    #if CONFIG_MQTT_TASKLIST_ENABLE
+      ret = ret && schedulerTimerTasksStart();
+    #endif // CONFIG_MQTT_TASKLIST_ENABLE
+  return ret;
+}
+
+void schedulerDelete()
+{
+  #if CONFIG_MQTT_TASKLIST_ENABLE
+    schedulerTimerTasksDelete();
+  #endif // CONFIG_MQTT_TASKLIST_ENABLE
+  #if CONFIG_MQTT_STATUS_ONLINE || CONFIG_MQTT_SYSINFO_ENABLE
+    schedulerTimerSysInfoDelete();
+  #endif // CONFIG_MQTT_STATUS_ONLINE || CONFIG_MQTT_SYSINFO_ENABLE
+  schedulerEventHandlerUnregister();
+  schedulerTimerMainDelete();
+  schedulerFree();
+}
+

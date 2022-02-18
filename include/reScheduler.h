@@ -22,10 +22,10 @@ bool schedulerInit();
 void schedulerFree();
 bool schedulerRegister(timespan_t* timespan, uint32_t value);
 
-bool schedulerTaskCreate(bool createSuspended);
-bool schedulerTaskSuspend();
-bool schedulerTaskResume();
-void schedulerTaskDelete();
+bool schedulerStart(bool createSuspended);
+bool schedulerSuspend();
+bool schedulerResume();
+void schedulerDelete();
 
 bool schedulerEventHandlerRegister();
 void schedulerEventHandlerUnregister();
