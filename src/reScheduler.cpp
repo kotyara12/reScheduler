@@ -252,6 +252,9 @@ static void schedulerTimerSysInfoExec(void* arg)
 static bool schedulerTimerSysInfoStart()
 {
   if (_schedulerTimerSysInfo) {
+    if (esp_timer_is_active(_schedulerTimerSysInfo)) {
+      esp_timer_stop(_schedulerTimerSysInfo);
+    };
     RE_OK_CHECK(logTAG, esp_timer_start_periodic(_schedulerTimerSysInfo, CONFIG_MQTT_SYSINFO_INTERVAL * 1000), return false);
     rlog_i(logTAG, "Timer [scheduler_sysinfo] was started");
     return true;
@@ -316,6 +319,9 @@ static void schedulerTimerTasksExec(void* arg)
 static bool schedulerTimerTasksStart()
 {
   if (_schedulerTimerTasks) {
+    if (esp_timer_is_active(_schedulerTimerTasks)) {
+      esp_timer_stop(_schedulerTimerTasks);
+    };
     RE_OK_CHECK(logTAG, esp_timer_start_periodic(_schedulerTimerTasks, CONFIG_MQTT_TASKLIST_INTERVAL * 1000), return false);
     rlog_i(logTAG, "Timer [scheduler_tasks] was started");
     return true;
