@@ -85,21 +85,40 @@ bool schedulerRegister(timespan_t* timespan, uint32_t value)
 
 #if defined(CONFIG_SILENT_MODE_ENABLE) && CONFIG_SILENT_MODE_ENABLE
 
-static timespan_t tsSilentMode = CONFIG_SILENT_MODE_INTERVAL;
+static timespan_t tsSilentModeTimespan = CONFIG_SILENT_MODE_INTERVAL;
+#if defined(CONFIG_SILENT_MODE_EXTENDED) && CONFIG_SILENT_MODE_EXTENDED
+static bool enabledSilentMode = true;
+#endif // CONFIG_SILENT_MODE_EXTENDED
 static bool stateSilentMode = false;
 static const char* tagSM = "TIME";
 
 void silentModeRegister()
 {
-  paramsRegisterCommonValue(OPT_KIND_PARAMETER, OPT_TYPE_TIMESPAN, nullptr, 
-    CONFIG_SILENT_MODE_TOPIC, CONFIG_SILENT_MODE_NAME,
-    CONFIG_MQTT_PARAMS_QOS, (void*)&tsSilentMode);
+  #if defined(CONFIG_SILENT_MODE_EXTENDED) && CONFIG_SILENT_MODE_EXTENDED
+    paramsGroupHandle_t _pgSilentMode = paramsRegisterGroup(nullptr, CONFIG_SILENT_MODE_PGROUP_KEY, CONFIG_SILENT_MODE_PGROUP_TOPIC, CONFIG_SILENT_MODE_PGROUP_FRIENDLY);
+    if (_pgSilentMode) {
+      paramsRegisterValue(OPT_KIND_PARAMETER, OPT_TYPE_U8, nullptr, _pgSilentMode, 
+        CONFIG_SILENT_MODE_ENABLE_TOPIC, CONFIG_SILENT_MODE_ENABLE_FRIENDLY,
+        CONFIG_MQTT_PARAMS_QOS, (void*)&enabledSilentMode);
+      paramsRegisterValue(OPT_KIND_PARAMETER, OPT_TYPE_TIMESPAN, nullptr, _pgSilentMode, 
+        CONFIG_SILENT_MODE_TIMESPAN_TOPIC, CONFIG_SILENT_MODE_TIMESPAN_FRIENDLY,
+        CONFIG_MQTT_PARAMS_QOS, (void*)&tsSilentModeTimespan);
+    };
+  #else
+    paramsRegisterCommonValue(OPT_KIND_PARAMETER, OPT_TYPE_TIMESPAN, nullptr, 
+      CONFIG_SILENT_MODE_TIMESPAN_TOPIC, CONFIG_SILENT_MODE_TIMESPAN_FRIENDLY,
+      CONFIG_MQTT_PARAMS_QOS, (void*)&tsSilentModeTimespan);
+  #endif // CONFIG_SILENT_MODE_EXTENDED
 }
 
 void silentModeCheck(struct tm* timeinfo)
 {
-  if (tsSilentMode > 0) {
-    bool newSilentMode = checkTimespan(timeinfo, tsSilentMode);
+  #if defined(CONFIG_SILENT_MODE_EXTENDED) && CONFIG_SILENT_MODE_EXTENDED
+  if (enabledSilentMode && (tsSilentModeTimespan > 0)) {
+  #else
+  if (tsSilentModeTimespan > 0) {
+  #endif // CONFIG_SILENT_MODE_EXTENDED
+    bool newSilentMode = checkTimespan(timeinfo, tsSilentModeTimespan);
     // If the mode has changed
     if (stateSilentMode != newSilentMode) {
       stateSilentMode = newSilentMode;
@@ -125,7 +144,11 @@ void silentModeCheckExternal()
 
 bool isSilentMode()
 {
-  return stateSilentMode;
+  #if defined(CONFIG_SILENT_MODE_EXTENDED) && CONFIG_SILENT_MODE_EXTENDED
+    return enabledSilentMode && stateSilentMode;
+  #else
+    return stateSilentMode;
+  #endif // CONFIG_SILENT_MODE_EXTENDED
 }
 
 #endif // CONFIG_SILENT_MODE_ENABLE
@@ -207,7 +230,7 @@ static void schedulerTimerMainTimeout(void* arg)
   gettimeofday(&now_time, nullptr);
   localtime_r(&now_time.tv_sec, &now_tm);
   uint32_t timeout_us = ((int)60 - (int)now_tm.tm_sec) * 1000000 - now_time.tv_usec;
-  RE_OK_CHECK(logTAG, esp_timer_start_once(_schedulerTimerMain, timeout_us), return);
+  RE_OK_CHECK_FIRST(logTAG, esp_timer_start_once(_schedulerTimerMain, timeout_us), return);
   rlog_d(logTAG, "Restart schedule timer for %d microseconds (sec=%d, usec=%d)", timeout_us, (int)now_tm.tm_sec, now_time.tv_usec);  
 }
 
@@ -218,7 +241,7 @@ static bool schedulerTimerMainCreate()
     memset(&cfgTimer, 0, sizeof(cfgTimer));
     cfgTimer.name = "scheduler_main";
     cfgTimer.callback = schedulerTimerMainTimeout;
-    RE_OK_CHECK(logTAG, esp_timer_create(&cfgTimer, &_schedulerTimerMain), return false);
+    RE_OK_CHECK_FIRST(logTAG, esp_timer_create(&cfgTimer, &_schedulerTimerMain), return false);
     if (_schedulerTimerMain) {
       RE_OK_CHECK(logTAG, esp_timer_start_once(_schedulerTimerMain, 1000000), return false);
     };
@@ -233,7 +256,7 @@ static void schedulerTimerMainDelete()
     if (esp_timer_is_active(_schedulerTimerMain)) {
       esp_timer_stop(_schedulerTimerMain);
     };
-    RE_OK_CHECK(logTAG, esp_timer_delete(_schedulerTimerMain), return);
+    RE_OK_CHECK_FIRST(logTAG, esp_timer_delete(_schedulerTimerMain), return);
     _schedulerTimerMain = nullptr;
   };
 }
@@ -255,7 +278,7 @@ static bool schedulerTimerSysInfoStart()
     if (esp_timer_is_active(_schedulerTimerSysInfo)) {
       esp_timer_stop(_schedulerTimerSysInfo);
     };
-    RE_OK_CHECK(logTAG, esp_timer_start_periodic(_schedulerTimerSysInfo, CONFIG_MQTT_SYSINFO_INTERVAL * 1000), return false);
+    RE_OK_CHECK_FIRST(logTAG, esp_timer_start_periodic(_schedulerTimerSysInfo, CONFIG_MQTT_SYSINFO_INTERVAL * 1000), return false);
     rlog_i(logTAG, "Timer [scheduler_sysinfo] was started");
     return true;
   };
@@ -269,7 +292,7 @@ static bool schedulerTimerSysInfoCreate(bool createSuspened)
     memset(&cfgTimer, 0, sizeof(cfgTimer));
     cfgTimer.name = "scheduler_sysinfo";
     cfgTimer.callback = schedulerTimerSysInfoExec;
-    RE_OK_CHECK(logTAG, esp_timer_create(&cfgTimer, &_schedulerTimerSysInfo), return false);
+    RE_OK_CHECK_FIRST(logTAG, esp_timer_create(&cfgTimer, &_schedulerTimerSysInfo), return false);
     if (!createSuspened) {
       return schedulerTimerSysInfoStart();
     };
@@ -297,7 +320,7 @@ static void schedulerTimerSysInfoDelete()
     if (esp_timer_is_active(_schedulerTimerSysInfo)) {
       esp_timer_stop(_schedulerTimerSysInfo);
     };
-    RE_OK_CHECK(logTAG, esp_timer_delete(_schedulerTimerSysInfo), return);
+    RE_OK_CHECK_FIRST(logTAG, esp_timer_delete(_schedulerTimerSysInfo), return);
     _schedulerTimerSysInfo = nullptr;
     rlog_i(logTAG, "Timer [scheduler_sysinfo] was deleted");
   };
@@ -322,7 +345,7 @@ static bool schedulerTimerTasksStart()
     if (esp_timer_is_active(_schedulerTimerTasks)) {
       esp_timer_stop(_schedulerTimerTasks);
     };
-    RE_OK_CHECK(logTAG, esp_timer_start_periodic(_schedulerTimerTasks, CONFIG_MQTT_TASKLIST_INTERVAL * 1000), return false);
+    RE_OK_CHECK_FIRST(logTAG, esp_timer_start_periodic(_schedulerTimerTasks, CONFIG_MQTT_TASKLIST_INTERVAL * 1000), return false);
     rlog_i(logTAG, "Timer [scheduler_tasks] was started");
     return true;
   };
@@ -336,7 +359,7 @@ static bool schedulerTimerTasksCreate(bool createSuspened)
     memset(&cfgTimer, 0, sizeof(cfgTimer));
     cfgTimer.name = "scheduler_tasks";
     cfgTimer.callback = schedulerTimerTasksExec;
-    RE_OK_CHECK(logTAG, esp_timer_create(&cfgTimer, &_schedulerTimerTasks), return false);
+    RE_OK_CHECK_FIRST(logTAG, esp_timer_create(&cfgTimer, &_schedulerTimerTasks), return false);
     if (!createSuspened) {
       return schedulerTimerTasksStart();
     };
@@ -364,7 +387,7 @@ static void schedulerTimerTasksDelete()
     if (esp_timer_is_active(_schedulerTimerTasks)) {
       esp_timer_stop(_schedulerTimerTasks);
     };
-    RE_OK_CHECK(logTAG, esp_timer_delete(_schedulerTimerTasks), return);
+    RE_OK_CHECK_FIRST(logTAG, esp_timer_delete(_schedulerTimerTasks), return);
     _schedulerTimerTasks = nullptr;
     rlog_i(logTAG, "Timer [scheduler_tasks] was deleted");
   };
@@ -402,7 +425,12 @@ static void schedulerOtaEventHandler(void* arg, esp_event_base_t event_base, int
 static void schedulerEventHandlerParams(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data)
 {
   if (event_id == RE_PARAMS_CHANGED)  {
-    if (*(uint32_t*)event_data == (uint32_t)&tsSilentMode) {
+    #if defined(CONFIG_SILENT_MODE_EXTENDED) && CONFIG_SILENT_MODE_EXTENDED
+      if ((*(uint32_t*)event_data == (uint32_t)&tsSilentModeTimespan) 
+      || (*(uint32_t*)event_data == (uint32_t)&enabledSilentMode)) {
+    #else
+      if (*(uint32_t*)event_data == (uint32_t)&tsSilentModeTimespan) {
+    #endif // CONFIG_SILENT_MODE_EXTENDED
       silentModeCheckExternal();
     };
   };
