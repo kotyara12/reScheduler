@@ -106,7 +106,7 @@ void silentModeRegister()
     };
   #else
     paramsRegisterCommonValue(OPT_KIND_PARAMETER, OPT_TYPE_TIMESPAN, nullptr, 
-      CONFIG_SILENT_MODE_TIMESPAN_TOPIC, CONFIG_SILENT_MODE_TIMESPAN_FRIENDLY,
+      CONFIG_SILENT_MODE_TOPIC, CONFIG_SILENT_MODE_FRIENDLY,
       CONFIG_MQTT_PARAMS_QOS, (void*)&tsSilentModeTimespan);
   #endif // CONFIG_SILENT_MODE_EXTENDED
 }
@@ -478,6 +478,9 @@ bool schedulerStart(bool createSuspended)
   bool ret = false;
   if (!_schedulerTimerMain) {
     ret = schedulerInit() && schedulerTimerMainCreate() && schedulerEventHandlerRegister();
+    #if defined(CONFIG_SILENT_MODE_ENABLE) && CONFIG_SILENT_MODE_ENABLE
+      silentModeRegister();
+    #endif // defined(CONFIG_SILENT_MODE_ENABLE) && CONFIG_SILENT_MODE_ENABLE
     #if CONFIG_MQTT_STATUS_ONLINE || CONFIG_MQTT_SYSINFO_ENABLE
       ret = ret && schedulerTimerSysInfoCreate(createSuspended);
     #endif // CONFIG_MQTT_STATUS_ONLINE || CONFIG_MQTT_SYSINFO_ENABLE
