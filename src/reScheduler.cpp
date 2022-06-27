@@ -440,6 +440,7 @@ static void schedulerEventHandlerParams(void* arg, esp_event_base_t event_base, 
 
 bool schedulerEventHandlerRegister()
 {
+  rlog_d(logTAG, "Register scheduler event handlers...");
   if (!_handlersRegistered) {
     _handlersRegistered = eventHandlerRegister(RE_TIME_EVENTS, RE_TIME_RTC_ENABLED, &schedulerEventHandlerTime, nullptr)
             && eventHandlerRegister(RE_TIME_EVENTS, RE_TIME_SNTP_SYNC_OK, &schedulerEventHandlerTime, nullptr)
