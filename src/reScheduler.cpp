@@ -16,6 +16,8 @@
 #include "reSysInfo.h"
 #endif // CONFIG_MQTT_STATUS_ONLINE || CONFIG_MQTT_SYSINFO_ENABLE
 
+#define TIME_EVENTS_POST_TIMEOUT  pdMS_TO_TICKS(1000)
+
 static const char* logTAG = "SCHD";
 
 typedef struct schedulerItem_t {
@@ -160,20 +162,20 @@ bool isSilentMode()
 static void schedulerTimerMainExec(struct tm* nowS, bool isCorrectTime)
 {
   // Publish an event every minute
-  eventLoopPost(RE_TIME_EVENTS, RE_TIME_EVERY_MINUTE, &nowS->tm_min, sizeof(int), portMAX_DELAY);
+  eventLoopPost(RE_TIME_EVENTS, RE_TIME_EVERY_MINUTE, &(nowS->tm_min), sizeof(int), TIME_EVENTS_POST_TIMEOUT);
 
   // Publish an event about beginning of next interval
   if (nowS->tm_min == 0) {
-    eventLoopPost(RE_TIME_EVENTS, RE_TIME_START_OF_HOUR, &nowS->tm_hour, sizeof(int), portMAX_DELAY);
+    eventLoopPost(RE_TIME_EVENTS, RE_TIME_START_OF_HOUR, &(nowS->tm_hour), sizeof(int), TIME_EVENTS_POST_TIMEOUT);
     if (nowS->tm_hour == 0) {
-      eventLoopPost(RE_TIME_EVENTS, RE_TIME_START_OF_DAY, &nowS->tm_mday, sizeof(int), portMAX_DELAY);
+      eventLoopPost(RE_TIME_EVENTS, RE_TIME_START_OF_DAY, &(nowS->tm_mday), sizeof(int), TIME_EVENTS_POST_TIMEOUT);
       if (nowS->tm_wday == CONFIG_FORMAT_FIRST_DAY_OF_WEEK) {
-        eventLoopPost(RE_TIME_EVENTS, RE_TIME_START_OF_WEEK, &nowS->tm_wday, sizeof(int), portMAX_DELAY);
+        eventLoopPost(RE_TIME_EVENTS, RE_TIME_START_OF_WEEK, &(nowS->tm_wday), sizeof(int), TIME_EVENTS_POST_TIMEOUT);
       };
       if (nowS->tm_mday == 1) {
-        eventLoopPost(RE_TIME_EVENTS, RE_TIME_START_OF_MONTH, &nowS->tm_mon, sizeof(int), portMAX_DELAY);
-        if (nowS->tm_mon == 1) {
-          eventLoopPost(RE_TIME_EVENTS, RE_TIME_START_OF_YEAR, &nowS->tm_year, sizeof(int), portMAX_DELAY);
+        eventLoopPost(RE_TIME_EVENTS, RE_TIME_START_OF_MONTH, &(nowS->tm_mon), sizeof(int), TIME_EVENTS_POST_TIMEOUT);
+        if (nowS->tm_mon == 0) {
+          eventLoopPost(RE_TIME_EVENTS, RE_TIME_START_OF_YEAR, &(nowS->tm_year), sizeof(int), TIME_EVENTS_POST_TIMEOUT);
         };
       };
     };
@@ -199,9 +201,9 @@ static void schedulerTimerMainExec(struct tm* nowS, bool isCorrectTime)
         if (newState != item->state) {
           item->state = newState;
           if (newState == 1) {
-            eventLoopPost(RE_TIME_EVENTS, RE_TIME_TIMESPAN_ON, (void*)item->value, sizeof(item->value), portMAX_DELAY);
+            eventLoopPost(RE_TIME_EVENTS, RE_TIME_TIMESPAN_ON, (void*)(item->value), sizeof(item->value), TIME_EVENTS_POST_TIMEOUT);
           } else {
-            eventLoopPost(RE_TIME_EVENTS, RE_TIME_TIMESPAN_OFF, (void*)item->value, sizeof(item->value), portMAX_DELAY);
+            eventLoopPost(RE_TIME_EVENTS, RE_TIME_TIMESPAN_OFF, (void*)(item->value), sizeof(item->value), TIME_EVENTS_POST_TIMEOUT);
           };
         };
       };
@@ -229,7 +231,7 @@ static void schedulerTimerMainTimeout(void* arg)
   // Calculate the timeout until the beginning of the next minute
   gettimeofday(&now_time, nullptr);
   localtime_r(&now_time.tv_sec, &now_tm);
-  uint32_t timeout_us = ((int)60 - (int)now_tm.tm_sec) * 1000000 - now_time.tv_usec;
+  uint32_t timeout_us = (((int)60 - (int)now_tm.tm_sec) * 1000000 - now_time.tv_usec) + 1;
   RE_OK_CHECK(esp_timer_start_once(_schedulerTimerMain, timeout_us), return);
   rlog_d(logTAG, "Restart schedule timer for %d microseconds (sec=%d, usec=%d)", timeout_us, (int)now_tm.tm_sec, now_time.tv_usec);  
 }
