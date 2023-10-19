@@ -172,7 +172,7 @@ static void schedulerTimerMainExec(struct tm* nowS, bool isCorrectTime)
       if (nowS->tm_wday == CONFIG_FORMAT_FIRST_DAY_OF_WEEK) {
         eventLoopPost(RE_TIME_EVENTS, RE_TIME_START_OF_WEEK, &(nowS->tm_wday), sizeof(int), TIME_EVENTS_POST_TIMEOUT);
       };
-      if (nowS->tm_mday == 1) {
+      if (nowS->tm_mday <= 1) {
         eventLoopPost(RE_TIME_EVENTS, RE_TIME_START_OF_MONTH, &(nowS->tm_mon), sizeof(int), TIME_EVENTS_POST_TIMEOUT);
         if (nowS->tm_mon == 0) {
           eventLoopPost(RE_TIME_EVENTS, RE_TIME_START_OF_YEAR, &(nowS->tm_year), sizeof(int), TIME_EVENTS_POST_TIMEOUT);
